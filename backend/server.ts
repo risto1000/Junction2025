@@ -1,39 +1,40 @@
 import express from 'express';
 import cors from 'cors';
-import { Pool } from 'pg';
+import { initDb, getDb } from './database.js';
 import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { existsSync } from 'fs';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// Google Cloud SQL connection configuration
-const pool = new Pool({
-  // For local development, use TCP connection
-  // For Cloud Run, use Unix socket
-  host: process.env.NODE_ENV === 'production' 
-    ? `/cloudsql/${process.env.CLOUD_SQL_CONNECTION_NAME}`
-    : process.env.DB_HOST || 'localhost',
-  database: process.env.DB_NAME || 'apprentice_circles',
-  user: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD,
-  port: parseInt(process.env.DB_PORT || '5432'),
-  // For Cloud SQL Unix socket, don't specify port
-  ...(process.env.NODE_ENV === 'production' && {
-    port: undefined,
-  }),
-});
-
 // Middleware
 app.use(cors());
+
+// Security headers
+app.use((req, res, next) => {
+  // Set permissive CSP for API endpoints (Cloud Run may override this)
+  if (req.path.startsWith('/api') || req.path === '/health') {
+    res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data: https:;");
+  }
+  next();
+});
+
 app.use(express.json());
+
+// Handle favicon requests (browsers automatically request this)
+app.get('/favicon.ico', (req, res) => {
+  res.status(204).end();
+});
 
 // Health check endpoint
 app.get('/health', async (req, res) => {
   try {
-    // Test database connection
-    await pool.query('SELECT 1');
+    const db = getDb();
+    await db.raw('SELECT 1');
     res.json({ 
       status: 'ok', 
       timestamp: new Date().toISOString(),
@@ -53,14 +54,17 @@ app.get('/health', async (req, res) => {
 app.post('/webhook', async (req, res) => {
   try {
     const { event, data, source } = req.body;
+    const db = getDb();
     
     console.log('Webhook received:', { event, source, timestamp: new Date().toISOString() });
     
-    // Log webhook to database
-    await pool.query(
-      'INSERT INTO webhook_logs (event_type, source, payload, created_at) VALUES ($1, $2, $3, NOW())',
-      [event, source || 'unknown', JSON.stringify(data || req.body)]
-    );
+    // Log webhook to database (assuming webhook_logs table exists)
+    await db('webhook_logs').insert({
+      event_type: event,
+      source: source || 'unknown',
+      payload: JSON.stringify(data || req.body),
+      created_at: db.fn.now()
+    });
     
     // Handle different webhook events
     switch (event) {
@@ -103,7 +107,6 @@ app.post('/webhook', async (req, res) => {
 async function handleEventCreated(data: any) {
   if (data && data.id) {
     console.log('Processing event.created for event:', data.id);
-    // Add any custom logic here, e.g., send notifications
   }
 }
 
@@ -115,12 +118,13 @@ async function handleEventUpdated(data: any) {
 
 async function handleRSVPCreated(data: any) {
   if (data && data.eventId && data.userId) {
+    const db = getDb();
     console.log('Processing rsvp.created for event:', data.eventId, 'user:', data.userId);
     // Update event spaces left
-    await pool.query(
-      'UPDATE events SET spaces_left = spaces_left - 1 WHERE id = $1 AND spaces_left > 0',
-      [data.eventId]
-    );
+    await db('events')
+      .where('id', data.eventId)
+      .where('spaces_left', '>', 0)
+      .decrement('spaces_left', 1);
   }
 }
 
@@ -139,44 +143,42 @@ async function handleProfileUpdated(data: any) {
 // API Routes - Events
 app.get('/api/events', async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT 
-        e.*,
-        u.full_name as organizer_name,
-        u.avatar as organizer_avatar,
-        u.badge as organizer_badge,
-        u.bio as organizer_bio,
-        COUNT(DISTINCT r.id) as rsvp_count
-      FROM events e
-      LEFT JOIN users u ON e.organizer_id = u.id
-      LEFT JOIN rsvps r ON e.id = r.event_id
-      GROUP BY e.id, u.id
-      ORDER BY e.created_at DESC
-    `);
+    const db = getDb();
+    const events = await db('events')
+      .leftJoin('users as u', 'events.organizer_id', 'u.id')
+      .leftJoin('rsvps as r', 'events.id', 'r.event_id')
+      .select(
+        'events.*',
+        'u.full_name as organizer_name',
+        'u.avatar as organizer_avatar',
+        'u.badge as organizer_badge',
+        'u.bio as organizer_bio',
+        db.raw('COUNT(DISTINCT r.id) as rsvp_count')
+      )
+      .groupBy('events.id', 'u.id')
+      .orderBy('events.created_at', 'desc');
     
     // Format events with participants
-    const events = await Promise.all(result.rows.map(async (event) => {
-      const participants = await pool.query(
-        `SELECT u.id, u.first_name, u.last_name, u.avatar 
-         FROM rsvps r
-         JOIN users u ON r.user_id = u.id
-         WHERE r.event_id = $1
-         LIMIT 10`,
-        [event.id]
-      );
+    const eventsWithParticipants = await Promise.all(events.map(async (event) => {
+      const participants = await db('rsvps as r')
+        .join('users as u', 'r.user_id', 'u.id')
+        .where('r.event_id', event.id)
+        .select('u.id', 'u.first_name', 'u.last_name', 'u.avatar')
+        .limit(10);
+      
       return {
         ...event,
-        participantDetails: participants.rows.map(p => ({
+        participantDetails: participants.map(p => ({
           id: p.id,
           firstName: p.first_name,
           lastName: p.last_name,
           avatar: p.avatar
         })),
-        participants: participants.rows.map(p => p.avatar)
+        participants: participants.map(p => p.avatar)
       };
     }));
     
-    res.json(events);
+    res.json(eventsWithParticipants);
   } catch (error) {
     console.error('Error fetching events:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -185,42 +187,38 @@ app.get('/api/events', async (req, res) => {
 
 app.get('/api/events/:id', async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT 
-        e.*,
-        u.full_name as organizer_name,
-        u.avatar as organizer_avatar,
-        u.badge as organizer_badge,
-        u.bio as organizer_bio
-      FROM events e
-      LEFT JOIN users u ON e.organizer_id = u.id
-      WHERE e.id = $1
-    `, [req.params.id]);
+    const db = getDb();
+    const event = await db('events')
+      .leftJoin('users as u', 'events.organizer_id', 'u.id')
+      .where('events.id', req.params.id)
+      .select(
+        'events.*',
+        'u.full_name as organizer_name',
+        'u.avatar as organizer_avatar',
+        'u.badge as organizer_badge',
+        'u.bio as organizer_bio'
+      )
+      .first();
     
-    if (result.rows.length === 0) {
+    if (!event) {
       return res.status(404).json({ error: 'Event not found' });
     }
     
-    const event = result.rows[0];
-    
     // Get participants
-    const participants = await pool.query(
-      `SELECT u.id, u.first_name, u.last_name, u.avatar 
-       FROM rsvps r
-       JOIN users u ON r.user_id = u.id
-       WHERE r.event_id = $1`,
-      [event.id]
-    );
+    const participants = await db('rsvps as r')
+      .join('users as u', 'r.user_id', 'u.id')
+      .where('r.event_id', event.id)
+      .select('u.id', 'u.first_name', 'u.last_name', 'u.avatar');
     
     res.json({
       ...event,
-      participantDetails: participants.rows.map(p => ({
+      participantDetails: participants.map(p => ({
         id: p.id,
         firstName: p.first_name,
         lastName: p.last_name,
         avatar: p.avatar
       })),
-      participants: participants.rows.map(p => p.avatar)
+      participants: participants.map(p => p.avatar)
     });
   } catch (error) {
     console.error('Error fetching event:', error);
@@ -246,21 +244,27 @@ app.post('/api/events', async (req, res) => {
       image
     } = req.body;
     
-    const result = await pool.query(
-      `INSERT INTO events (
-        title, organizer_id, time, date, location, description,
-        latitude, longitude, capacity, spaces_left,
-        is_micro_apprenticeship, accessibility_notes, age_suitability, image, created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, NOW())
-      RETURNING *`,
-      [
-        title, organizer_id, time, date, location, description,
-        latitude, longitude, capacity, is_micro_apprenticeship,
-        accessibility_notes, age_suitability, image
-      ]
-    );
+    const db = getDb();
+    const [id] = await db('events').insert({
+      title,
+      organizer_id,
+      time,
+      date,
+      location,
+      description,
+      latitude,
+      longitude,
+      capacity,
+      spaces_left: capacity,
+      is_micro_apprenticeship,
+      accessibility_notes,
+      age_suitability,
+      image,
+      created_at: db.fn.now()
+    });
     
-    res.status(201).json(result.rows[0]);
+    const event = await db('events').where('id', id).first();
+    res.status(201).json(event);
   } catch (error) {
     console.error('Error creating event:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -270,11 +274,12 @@ app.post('/api/events', async (req, res) => {
 // API Routes - Users/Profiles
 app.get('/api/users/:id', async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM users WHERE id = $1', [req.params.id]);
-    if (result.rows.length === 0) {
+    const db = getDb();
+    const user = await db('users').where('id', req.params.id).first();
+    if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
-    res.json(result.rows[0]);
+    res.json(user);
   } catch (error) {
     console.error('Error fetching user:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -296,37 +301,32 @@ app.put('/api/users/:id', async (req, res) => {
       offering_apprenticeship
     } = req.body;
     
-    const result = await pool.query(
-      `UPDATE users SET
-        full_name = COALESCE($1, full_name),
-        age = COALESCE($2, age),
-        tagline = COALESCE($3, tagline),
-        location = COALESCE($4, location),
-        avatar = COALESCE($5, avatar),
-        career_highlights = COALESCE($6, career_highlights),
-        achievements = COALESCE($7, achievements),
-        hobbies = COALESCE($8, hobbies),
-        micro_apprenticeship_offer = COALESCE($9, micro_apprenticeship_offer),
-        offering_apprenticeship = COALESCE($10, offering_apprenticeship),
-        updated_at = NOW()
-      WHERE id = $11
-      RETURNING *`,
-      [
-        full_name, age, tagline, location, avatar,
-        JSON.stringify(career_highlights),
-        JSON.stringify(achievements),
-        JSON.stringify(hobbies),
-        micro_apprenticeship_offer,
-        offering_apprenticeship,
-        req.params.id
-      ]
-    );
+    const db = getDb();
+    const updateData: any = {
+      updated_at: db.fn.now()
+    };
     
-    if (result.rows.length === 0) {
+    if (full_name !== undefined) updateData.full_name = full_name;
+    if (age !== undefined) updateData.age = age;
+    if (tagline !== undefined) updateData.tagline = tagline;
+    if (location !== undefined) updateData.location = location;
+    if (avatar !== undefined) updateData.avatar = avatar;
+    if (career_highlights !== undefined) updateData.career_highlights = JSON.stringify(career_highlights);
+    if (achievements !== undefined) updateData.achievements = JSON.stringify(achievements);
+    if (hobbies !== undefined) updateData.hobbies = JSON.stringify(hobbies);
+    if (micro_apprenticeship_offer !== undefined) updateData.micro_apprenticeship_offer = micro_apprenticeship_offer;
+    if (offering_apprenticeship !== undefined) updateData.offering_apprenticeship = offering_apprenticeship;
+    
+    await db('users')
+      .where('id', req.params.id)
+      .update(updateData);
+    
+    const user = await db('users').where('id', req.params.id).first();
+    if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
     
-    res.json(result.rows[0]);
+    res.json(user);
   } catch (error) {
     console.error('Error updating user:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -337,40 +337,41 @@ app.put('/api/users/:id', async (req, res) => {
 app.post('/api/rsvps', async (req, res) => {
   try {
     const { event_id, user_id, invite_family } = req.body;
+    const db = getDb();
     
     // Check if already RSVP'd
-    const existing = await pool.query(
-      'SELECT id FROM rsvps WHERE event_id = $1 AND user_id = $2',
-      [event_id, user_id]
-    );
+    const existing = await db('rsvps')
+      .where('event_id', event_id)
+      .where('user_id', user_id)
+      .first();
     
-    if (existing.rows.length > 0) {
+    if (existing) {
       return res.status(400).json({ error: 'Already RSVP\'d to this event' });
     }
     
     // Check if event has space
-    const event = await pool.query('SELECT spaces_left FROM events WHERE id = $1', [event_id]);
-    if (event.rows.length === 0) {
+    const event = await db('events').where('id', event_id).first();
+    if (!event) {
       return res.status(404).json({ error: 'Event not found' });
     }
-    if (event.rows[0].spaces_left <= 0) {
+    if (event.spaces_left <= 0) {
       return res.status(400).json({ error: 'Event is full' });
     }
     
-    const result = await pool.query(
-      `INSERT INTO rsvps (event_id, user_id, invite_family, created_at)
-       VALUES ($1, $2, $3, NOW())
-       RETURNING *`,
-      [event_id, user_id, invite_family || false]
-    );
+    const [id] = await db('rsvps').insert({
+      event_id,
+      user_id,
+      invite_family: invite_family || false,
+      created_at: db.fn.now()
+    });
     
     // Update event spaces_left
-    await pool.query(
-      'UPDATE events SET spaces_left = spaces_left - 1 WHERE id = $1',
-      [event_id]
-    );
+    await db('events')
+      .where('id', event_id)
+      .decrement('spaces_left', 1);
     
-    res.status(201).json(result.rows[0]);
+    const rsvp = await db('rsvps').where('id', id).first();
+    res.status(201).json(rsvp);
   } catch (error) {
     console.error('Error creating RSVP:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -380,14 +381,13 @@ app.post('/api/rsvps', async (req, res) => {
 // API Routes - Favorites
 app.get('/api/users/:id/favorites', async (req, res) => {
   try {
-    const result = await pool.query(
-      `SELECT e.* FROM favorites f
-       JOIN events e ON f.event_id = e.id
-       WHERE f.user_id = $1
-       ORDER BY f.created_at DESC`,
-      [req.params.id]
-    );
-    res.json(result.rows);
+    const db = getDb();
+    const favorites = await db('favorites as f')
+      .join('events as e', 'f.event_id', 'e.id')
+      .where('f.user_id', req.params.id)
+      .select('e.*')
+      .orderBy('f.created_at', 'desc');
+    res.json(favorites);
   } catch (error) {
     console.error('Error fetching favorites:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -397,20 +397,23 @@ app.get('/api/users/:id/favorites', async (req, res) => {
 app.post('/api/favorites', async (req, res) => {
   try {
     const { event_id, user_id } = req.body;
+    const db = getDb();
     
-    const result = await pool.query(
-      `INSERT INTO favorites (event_id, user_id, created_at)
-       VALUES ($1, $2, NOW())
-       ON CONFLICT (event_id, user_id) DO NOTHING
-       RETURNING *`,
-      [event_id, user_id]
-    );
-    
-    if (result.rows.length === 0) {
-      return res.status(200).json({ message: 'Already favorited' });
+    try {
+      const [id] = await db('favorites').insert({
+        event_id,
+        user_id,
+        created_at: db.fn.now()
+      });
+      const favorite = await db('favorites').where('id', id).first();
+      res.status(201).json(favorite);
+    } catch (error: any) {
+      // MySQL duplicate entry error
+      if (error.code === 'ER_DUP_ENTRY') {
+        return res.status(200).json({ message: 'Already favorited' });
+      }
+      throw error;
     }
-    
-    res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error('Error creating favorite:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -420,11 +423,12 @@ app.post('/api/favorites', async (req, res) => {
 app.delete('/api/favorites', async (req, res) => {
   try {
     const { event_id, user_id } = req.body;
+    const db = getDb();
     
-    await pool.query(
-      'DELETE FROM favorites WHERE event_id = $1 AND user_id = $2',
-      [event_id, user_id]
-    );
+    await db('favorites')
+      .where('event_id', event_id)
+      .where('user_id', user_id)
+      .delete();
     
     res.status(200).json({ message: 'Favorite removed' });
   } catch (error) {
@@ -433,8 +437,56 @@ app.delete('/api/favorites', async (req, res) => {
   }
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-});
+// Serve static files from frontend build (if exists)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Try multiple possible paths for frontend build
+const possiblePaths = [
+  path.join(__dirname, '../frontend/build'),  // From backend/dist -> ../frontend/build
+  path.join(process.cwd(), '../frontend/build'), // From backend/ -> ../frontend/build
+  path.join(process.cwd(), 'frontend/build'),   // From app root -> frontend/build
+  '/app/frontend/build'                         // Absolute path in Docker
+];
+
+let frontendBuildPath: string | null = null;
+for (const possiblePath of possiblePaths) {
+  if (existsSync(possiblePath)) {
+    frontendBuildPath = possiblePath;
+    console.log(`Found frontend build at: ${frontendBuildPath}`);
+    break;
+  }
+}
+
+if (frontendBuildPath) {
+  app.use(express.static(frontendBuildPath));
+  
+  // Serve React app for all non-API routes (SPA routing)
+  app.get('*', (req, res) => {
+    // Don't serve frontend for API routes
+    if (req.path.startsWith('/api') || req.path === '/health' || req.path === '/favicon.ico') {
+      return;
+    }
+    res.sendFile(path.join(frontendBuildPath!, 'index.html'));
+  });
+  
+  console.log('Frontend static files enabled');
+} else {
+  console.log('Frontend build not found, serving API only');
+  console.log('Checked paths:', possiblePaths);
+}
+
+// Initialize database and start server
+initDb()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+      console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`Database: ${process.env.DB_HOST ? 'Local (via proxy)' : 'Cloud Run'}`);
+    });
+  })
+  .catch((err) => {
+    console.error('Failed to initialize database:', err);
+    process.exit(1);
+  });
+
