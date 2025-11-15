@@ -9,6 +9,8 @@ This guide covers deploying the backend to Google Cloud Run with Cloud SQL MySQL
   - Roles: Cloud SQL Client, Secret Manager Secret Accessor
 - Secret Manager: `junction2025-db-password`
   - Contains database password: `Kanakissa1!`
+- Secret Manager: `elevenlabs-api-key` (create this)
+  - Contains ElevenLabs API key for voice profile creation
 - Database User: `root`
 - Instance: `gen-lang-client-0044988466:europe-north1:junction2025db`
 
@@ -43,6 +45,7 @@ DB_PORT="3306"
 DB_USER="root"
 DB_PASS="Kanakissa1!"
 DB_NAME="junction2025"
+ELEVENLABS_API_KEY="your-elevenlabs-api-key-here"
 ```
 
 ### 4. Install Dependencies
@@ -69,6 +72,18 @@ Before deploying, ensure you have created a database inside your Cloud SQL insta
 3. Go to the "Databases" tab
 4. Click "CREATE DATABASE"
 5. Name it: `junction2025` (or update `.env` and Cloud Run config)
+
+### Run Database Migration
+
+To add the `voice_profile_id` column to the users table:
+
+```bash
+cd backend
+npm install
+tsx migrate-voice-profile.ts
+```
+
+This will add the `voice_profile_id` column to store ElevenLabs voice profile IDs.
 
 ## Deploying to Cloud Run
 
@@ -130,6 +145,13 @@ npm start
      - **Secret**: Select `junction2025-db-password`
      - **Version**: `latest`
      - Click **Done**
+   
+   - Click **"Reference a secret"** tab again:
+     - **Exposed as**: Environment Variable
+     - **Name**: `ELEVENLABS_API_KEY`
+     - **Secret**: Select `elevenlabs-api-key` (create this secret in Secret Manager first)
+     - **Version**: `latest`
+     - Click **Done**
 
 4. **Security** tab:
    - **Service Account**: Select `junction2025-app-runner`
@@ -151,6 +173,10 @@ Once deployed, your API will be available at:
 - `POST /api/events` - Create event
 - `GET /api/users/:id` - Get user by ID
 - `PUT /api/users/:id` - Update user
+- `POST /api/users/voice-profile` - Create or update user profile from ElevenLabs voice data
+  - Body: `{ user_id?: number, voice_profile_id?: string, full_name, age, tagline, location, ... }`
+  - If `user_id` provided: updates existing user
+  - If `user_id` not provided: creates new user
 - `POST /api/rsvps` - Create RSVP
 - `GET /api/users/:id/favorites` - Get user favorites
 - `POST /api/favorites` - Add favorite
@@ -177,4 +203,12 @@ Once deployed, your API will be available at:
 - Ensure Cloud SQL Auth Proxy is running
 - Verify `.env` file exists and has correct values
 - Check that the database exists in Cloud SQL
+- Verify `ELEVENLABS_API_KEY` is set in `.env` for voice profile features
+
+### ElevenLabs Integration
+
+- Create a secret in Google Cloud Secret Manager named `elevenlabs-api-key`
+- Add your ElevenLabs API key as the secret value
+- The backend will use this to create voice profiles when users record their profile
+- The `voice_profile_id` column stores the ElevenLabs voice profile ID for each user
 

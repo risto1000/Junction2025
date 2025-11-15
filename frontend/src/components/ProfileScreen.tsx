@@ -14,6 +14,7 @@ interface ProfileScreenProps {
     microApprenticeshipOffer: string;
     offeringApprenticeship: boolean;
   };
+  userId?: number | null;
   isEditing: boolean;
   onEditToggle: () => void;
   onProfileUpdate: (profile: any) => void;
@@ -21,7 +22,7 @@ interface ProfileScreenProps {
   onStartVoiceOnboarding: () => void;
 }
 
-export function ProfileScreen({ profile, isEditing, onEditToggle, onProfileUpdate, onHostDashboard, onStartVoiceOnboarding }: ProfileScreenProps) {
+export function ProfileScreen({ profile, userId, isEditing, onEditToggle, onProfileUpdate, onHostDashboard, onStartVoiceOnboarding }: ProfileScreenProps) {
   const [localProfile, setLocalProfile] = useState(profile);
   const [editingHobby, setEditingHobby] = useState<string | null>(null);
   const [showRerecordConfirm, setShowRerecordConfirm] = useState(false);

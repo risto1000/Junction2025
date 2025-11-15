@@ -57,6 +57,17 @@ function App() {
   const [isProfileEditing, setIsProfileEditing] = useState(false);
   const [showMapView, setShowMapView] = useState(false);
   const [showHostEventModal, setShowHostEventModal] = useState(false);
+  
+  // Initialize userId from localStorage or generate new one
+  const [userId, setUserId] = useState<number | null>(() => {
+    const stored = localStorage.getItem('userId');
+    if (stored) {
+      const parsed = parseInt(stored, 10);
+      return isNaN(parsed) ? null : parsed;
+    }
+    return null;
+  });
+  
   const [userProfile, setUserProfile] = useState({
     name: '',
     age: 0,
@@ -302,6 +313,11 @@ function App() {
 
   const handleVoiceOnboardingComplete = (profileData: any) => {
     setUserProfile(prev => ({ ...prev, ...profileData }));
+    // Update userId if we got one from the backend
+    if (profileData.id && !userId) {
+      setUserId(profileData.id);
+      localStorage.setItem('userId', profileData.id.toString());
+    }
     setShowVoiceOnboarding(false);
     setCurrentScreen('profile');
     showToast('Profile created successfully!');
@@ -326,6 +342,7 @@ function App() {
         return (
           <ProfileScreen 
             profile={userProfile}
+            userId={userId}
             isEditing={isProfileEditing}
             onEditToggle={() => setIsProfileEditing(!isProfileEditing)}
             onProfileUpdate={setUserProfile}
@@ -410,6 +427,7 @@ function App() {
         {/* Modals */}
         {showVoiceOnboarding && (
           <VoiceOnboardingModal 
+            userId={userId}
             onComplete={handleVoiceOnboardingComplete}
             onClose={() => setShowVoiceOnboarding(false)}
           />
