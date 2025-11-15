@@ -7,7 +7,8 @@
       "dev": "tsx watch server.ts",
       "build": "tsc",
       "start": "node dist/server.js",
-      "migrate": "tsx migrate.ts"
+      "migrate": "tsx migrate.ts",
+      "test:db": "tsx test-db-init.ts"
     },
     "dependencies": {
       "express": "^4.18.2",

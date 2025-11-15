@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { SplashScreen } from './components/SplashScreen';
 import { ProfileScreen } from './components/ProfileScreen';
 import { EventsScreen } from './components/EventsScreen';
@@ -58,20 +58,76 @@ function App() {
   const [showMapView, setShowMapView] = useState(false);
   const [showHostEventModal, setShowHostEventModal] = useState(false);
   const [userProfile, setUserProfile] = useState({
-    name: 'Jari Koskinen',
-    age: 68,
-    tagline: 'Retired carpenter — loves walks & woodworking',
-    location: 'Helsinki, Finland',
-    avatar: 'https://images.unsplash.com/photo-1607990281513-2c110a25bd8c?w=400&h=400&fit=crop',
-    careerHighlights: [
-      { company: 'Helsinki Construction', title: 'Master Carpenter', years: '1978-2015' },
-      { company: 'City of Helsinki', title: 'Woodwork Instructor', years: '2016-2020' }
-    ],
-    achievements: ['Master Carpenter', 'Community Mentor', '50+ Events Hosted'],
-    hobbies: ['Woodworking', 'Duck Walks', 'Swimming', 'Knitting', 'Photography'],
-    microApprenticeshipOffer: '30-min coffee chat on basic chair repair',
-    offeringApprenticeship: true,
+    name: '',
+    age: 0,
+    tagline: '',
+    location: '',
+    avatar: '',
+    careerHighlights: [] as Array<{ company: string; title: string; years: string }>,
+    achievements: [] as string[],
+    hobbies: [] as string[],
+    microApprenticeshipOffer: '',
+    offeringApprenticeship: false,
   });
+  const [userLoading, setUserLoading] = useState(true);
+  const [userError, setUserError] = useState<string | null>(null);
+
+  // Fetch user profile from API
+  useEffect(() => {
+    const fetchUserProfile = async () => {
+      try {
+        setUserLoading(true);
+        setUserError(null);
+        // Using default user ID of 1 - in production this would come from auth
+        const userId = import.meta.env.VITE_DEFAULT_USER_ID || '1';
+        const response = await fetch(`/api/users/${userId}`);
+        
+        if (!response.ok) {
+          if (response.status === 404) {
+            // User doesn't exist yet, use default empty profile
+            setUserLoading(false);
+            return;
+          }
+          throw new Error('Failed to fetch user profile');
+        }
+        
+        const userData = await response.json();
+        
+        // Transform database format to frontend format
+        setUserProfile({
+          name: userData.full_name || '',
+          age: userData.age || 0,
+          tagline: userData.tagline || '',
+          location: userData.location || '',
+          avatar: userData.avatar || '',
+          careerHighlights: userData.career_highlights 
+            ? (typeof userData.career_highlights === 'string' 
+                ? JSON.parse(userData.career_highlights) 
+                : userData.career_highlights)
+            : [],
+          achievements: userData.achievements 
+            ? (typeof userData.achievements === 'string' 
+                ? JSON.parse(userData.achievements) 
+                : userData.achievements)
+            : [],
+          hobbies: userData.hobbies 
+            ? (typeof userData.hobbies === 'string' 
+                ? JSON.parse(userData.hobbies) 
+                : userData.hobbies)
+            : [],
+          microApprenticeshipOffer: userData.micro_apprenticeship_offer || '',
+          offeringApprenticeship: userData.offering_apprenticeship || false,
+        });
+      } catch (error) {
+        console.error('Error fetching user profile:', error);
+        setUserError(error instanceof Error ? error.message : 'Failed to load user profile');
+      } finally {
+        setUserLoading(false);
+      }
+    };
+
+    fetchUserProfile();
+  }, []);
 
   const events: Event[] = [
     {

@@ -2,6 +2,7 @@
 import knex from 'knex';
 import { Connector } from '@google-cloud/cloud-sql-connector';
 import { config } from 'dotenv';
+import { initTables } from './migrations.js';
 // Load environment variables from .env file for local development
 config();
 const connector = new Connector();
@@ -48,6 +49,8 @@ export async function initDb() {
         pool: { min: 0, max: 10 },
     };
     db = knex(knexConfig);
+    // Initialize database tables
+    await initTables(db);
     return db;
 }
 // Export a function to get the initialized instance
