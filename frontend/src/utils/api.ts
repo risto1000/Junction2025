@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://junction2025-backend-1087825056058.europe-north1.run.app';
 
 export interface VoiceProfileData {
   user_id?: number;
