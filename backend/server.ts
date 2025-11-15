@@ -5,6 +5,8 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
+import { findBestMatch } from './matchingService.js';
+
 dotenv.config();
 
 const app = express();
