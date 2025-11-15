@@ -119,19 +119,6 @@ export async function initTables(db: Knex): Promise<void> {
       }
     });
 
-    await db.schema.hasTable('webhook_logs').then(async (exists) => {
-      if (!exists) {
-        await db.schema.createTable('webhook_logs', (table) => {
-          table.increments('id').primary();
-          table.string('event_type', 100).notNullable();
-          table.string('source', 100);
-          table.text('payload'); // JSON stored as TEXT in MySQL
-          table.timestamp('created_at').defaultTo(db.fn.now());
-        });
-        console.log('Created webhook_logs table');
-      }
-    });
-
     // Create user_descriptions table (for ElevenLabs webhook)
     await db.schema.hasTable('user_descriptions').then(async (exists) => {
       if (!exists) {
