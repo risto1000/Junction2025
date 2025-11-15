@@ -83,6 +83,75 @@ function App() {
   const [userLoading, setUserLoading] = useState(true);
   const [userError, setUserError] = useState<string | null>(null);
 
+  // Helper function to transform user data from API to frontend format
+  const transformUserData = (userData: any) => ({
+    name: userData.full_name || '',
+    age: userData.age || 0,
+    tagline: userData.tagline || '',
+    location: userData.location || '',
+    avatar: userData.avatar || 'https://images.unsplash.com/photo-1607990281513-2c110a25bd8c?w=400&h=400&fit=crop',
+    careerHighlights: userData.career_highlights 
+      ? (typeof userData.career_highlights === 'string' 
+          ? (() => {
+              try {
+                return JSON.parse(userData.career_highlights);
+              } catch {
+                return [];
+              }
+            })()
+          : userData.career_highlights)
+      : [],
+    achievements: userData.achievements 
+      ? (typeof userData.achievements === 'string' 
+          ? (() => {
+              try {
+                return JSON.parse(userData.achievements);
+              } catch {
+                return [];
+              }
+            })()
+          : userData.achievements)
+      : [],
+    hobbies: userData.hobbies 
+      ? (typeof userData.hobbies === 'string' 
+          ? (() => {
+              try {
+                return JSON.parse(userData.hobbies);
+              } catch {
+                return [];
+              }
+            })()
+          : userData.hobbies)
+      : [],
+    microApprenticeshipOffer: userData.micro_apprenticeship_offer || '',
+    offeringApprenticeship: userData.offering_apprenticeship || false,
+  });
+
+  // Helper function to check if profile is empty
+  const isProfileEmpty = (profile: typeof userProfile) => {
+    return !profile.name && 
+           !profile.tagline && 
+           !profile.location && 
+           profile.careerHighlights.length === 0 && 
+           profile.achievements.length === 0 && 
+           profile.hobbies.length === 0 && 
+           !profile.microApprenticeshipOffer;
+  };
+
+  // Fetch placeholder profile from user/3 (Jari Koskinen)
+  const fetchPlaceholderProfile = async () => {
+    try {
+      const response = await fetch(`/api/users/3`);
+      if (response.ok) {
+        const placeholderData = await response.json();
+        return transformUserData(placeholderData);
+      }
+    } catch (error) {
+      console.warn('Failed to fetch placeholder profile from user/3:', error);
+    }
+    return null;
+  };
+
   // Fetch user profile from API
   useEffect(() => {
     const fetchUserProfile = async () => {
@@ -90,8 +159,17 @@ function App() {
       const targetUserId = userId || (import.meta.env.VITE_DEFAULT_USER_ID ? parseInt(import.meta.env.VITE_DEFAULT_USER_ID) : null);
       
       if (!targetUserId) {
-        // No user ID - show splash screen or empty profile
-        setUserLoading(false);
+        // No user ID - fetch placeholder from user/3
+        try {
+          const placeholder = await fetchPlaceholderProfile();
+          if (placeholder) {
+            setUserProfile(placeholder);
+          }
+        } catch (error) {
+          console.error('Error fetching placeholder profile:', error);
+        } finally {
+          setUserLoading(false);
+        }
         return;
       }
 
@@ -100,9 +178,16 @@ function App() {
         setUserError(null);
         const response = await fetch(`/api/users/${targetUserId}`);
         
+        let profileData: typeof userProfile;
+        
         if (!response.ok) {
           if (response.status === 404) {
-            // User doesn't exist yet, use default empty profile
+            // User doesn't exist yet, fetch placeholder from user/3
+            console.log('User not found, fetching placeholder from user/3');
+            const placeholder = await fetchPlaceholderProfile();
+            if (placeholder) {
+              setUserProfile(placeholder);
+            }
             setUserLoading(false);
             return;
           }
@@ -110,53 +195,34 @@ function App() {
         }
         
         const userData = await response.json();
+        profileData = transformUserData(userData);
         
-        // Transform database format to frontend format
-        setUserProfile({
-          name: userData.full_name || '',
-          age: userData.age || 0,
-          tagline: userData.tagline || '',
-          location: userData.location || '',
-          avatar: userData.avatar || 'https://images.unsplash.com/photo-1607990281513-2c110a25bd8c?w=400&h=400&fit=crop',
-          careerHighlights: userData.career_highlights 
-            ? (typeof userData.career_highlights === 'string' 
-                ? (() => {
-                    try {
-                      return JSON.parse(userData.career_highlights);
-                    } catch {
-                      return [];
-                    }
-                  })()
-                : userData.career_highlights)
-            : [],
-          achievements: userData.achievements 
-            ? (typeof userData.achievements === 'string' 
-                ? (() => {
-                    try {
-                      return JSON.parse(userData.achievements);
-                    } catch {
-                      return [];
-                    }
-                  })()
-                : userData.achievements)
-            : [],
-          hobbies: userData.hobbies 
-            ? (typeof userData.hobbies === 'string' 
-                ? (() => {
-                    try {
-                      return JSON.parse(userData.hobbies);
-                    } catch {
-                      return [];
-                    }
-                  })()
-                : userData.hobbies)
-            : [],
-          microApprenticeshipOffer: userData.micro_apprenticeship_offer || '',
-          offeringApprenticeship: userData.offering_apprenticeship || false,
-        });
+        // Check if profile is empty, if so use placeholder from user/3
+        if (isProfileEmpty(profileData)) {
+          console.log('User profile is empty, fetching placeholder from user/3');
+          const placeholder = await fetchPlaceholderProfile();
+          if (placeholder) {
+            setUserProfile(placeholder);
+          } else {
+            // Fallback to empty profile if placeholder fetch fails
+            setUserProfile(profileData);
+          }
+        } else {
+          // Profile has data, use it
+          setUserProfile(profileData);
+        }
       } catch (error) {
         console.error('Error fetching user profile:', error);
         setUserError(error instanceof Error ? error.message : 'Failed to load user profile');
+        // Try to load placeholder on error
+        try {
+          const placeholder = await fetchPlaceholderProfile();
+          if (placeholder) {
+            setUserProfile(placeholder);
+          }
+        } catch (placeholderError) {
+          console.error('Failed to load placeholder profile:', placeholderError);
+        }
       } finally {
         setUserLoading(false);
       }

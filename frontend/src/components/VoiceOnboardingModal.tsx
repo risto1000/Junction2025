@@ -32,34 +32,66 @@ export function VoiceOnboardingModal({ userId, onComplete, onClose }: VoiceOnboa
 
   // Handle conversation completion - extract data from webhook response
   const handleConversationComplete = async (transcript: string, userDescription: any) => {
-    console.log('Conversation completed:', { transcript, userDescription });
-    
-    // Extract data from ElevenLabs response
-    // The userDescription comes from the webhook payload
-    const extractedData = {
-      name: userDescription?.name || userDescription?.full_name || '',
-      tagline: userDescription?.tagline || userDescription?.bio || '',
-      location: userDescription?.location || '',
-      profession: userDescription?.profession || '',
-      availability: userDescription?.availability || '',
-      hobbies: userDescription?.hobbies || (userDescription?.interests ? [userDescription.interests] : []),
-      // Try to extract more structured data if available
-      career_highlights: userDescription?.career_highlights || [],
-      achievements: userDescription?.achievements || []
-    };
+    try {
+      console.log('Conversation completed:', { transcript, userDescription });
+      
+      // Safely extract and sanitize data from ElevenLabs response
+      // The userDescription comes from the webhook payload
+      const safeString = (value: any): string => {
+        if (!value) return '';
+        try {
+          return String(value).trim();
+        } catch (e) {
+          console.warn('Failed to convert value to string:', e);
+          return '';
+        }
+      };
 
-    setConversationData({ transcript, userDescription, extractedData });
-    setEditFormData({
-      name: extractedData.name,
-      tagline: extractedData.tagline || `${extractedData.profession || ''} — ${extractedData.location || ''}`.trim(),
-      location: extractedData.location,
-      hobbies: Array.isArray(extractedData.hobbies) ? extractedData.hobbies : [],
-      profession: extractedData.profession,
-      availability: extractedData.availability
-    });
-    
-    setShowConversation(false);
-    setShowEditScreen(true);
+      const safeArray = (value: any): string[] => {
+        if (!value) return [];
+        if (Array.isArray(value)) return value.map(v => safeString(v)).filter(v => v);
+        if (typeof value === 'string') {
+          try {
+            const parsed = JSON.parse(value);
+            return Array.isArray(parsed) ? parsed.map(v => safeString(v)).filter(v => v) : [safeString(value)];
+          } catch {
+            return [safeString(value)];
+          }
+        }
+        return [safeString(value)];
+      };
+
+      const extractedData = {
+        name: safeString(userDescription?.name || userDescription?.full_name),
+        tagline: safeString(userDescription?.tagline || userDescription?.bio),
+        location: safeString(userDescription?.location),
+        profession: safeString(userDescription?.profession),
+        availability: safeString(userDescription?.availability), // Safely handle availability
+        hobbies: safeArray(userDescription?.hobbies || userDescription?.interests),
+        // Try to extract more structured data if available
+        career_highlights: safeArray(userDescription?.career_highlights),
+        achievements: safeArray(userDescription?.achievements)
+      };
+
+      setConversationData({ transcript, userDescription, extractedData });
+      setEditFormData({
+        name: extractedData.name,
+        tagline: extractedData.tagline || `${extractedData.profession || ''} — ${extractedData.location || ''}`.trim(),
+        location: extractedData.location,
+        hobbies: extractedData.hobbies,
+        profession: extractedData.profession,
+        availability: extractedData.availability
+      });
+      
+      setShowConversation(false);
+      setShowEditScreen(true);
+    } catch (error) {
+      console.error('Error handling conversation completion:', error);
+      // Show error but still allow user to proceed
+      alert('There was an issue processing the conversation data, but you can still edit your profile.');
+      setShowConversation(false);
+      setShowEditScreen(true);
+    }
   };
 
   const handleFinish = async () => {

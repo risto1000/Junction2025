@@ -236,13 +236,33 @@ export function RealTimeVoiceConversation({
       
       if (response.ok) {
         const data = await response.json();
-        const userDescription = data.userDescription || {
-          name: data.name,
-          profession: data.profession,
-          location: data.location,
-          availability: data.availability,
-          ...fallbackData
-        };
+        // Safely extract user description with proper error handling
+        let userDescription: any = {};
+        try {
+          if (data.userDescription) {
+            userDescription = data.userDescription;
+          } else {
+            userDescription = {
+              name: data.name || '',
+              profession: data.profession || '',
+              location: data.location || '',
+              availability: data.availability || '', // Safely handle availability
+              ...fallbackData
+            };
+          }
+          
+          // Ensure all fields are strings to prevent parsing errors
+          userDescription = {
+            name: String(userDescription.name || ''),
+            profession: String(userDescription.profession || ''),
+            location: String(userDescription.location || ''),
+            availability: String(userDescription.availability || ''), // Convert to string safely
+            ...userDescription
+          };
+        } catch (parseError) {
+          console.error('Error parsing user description:', parseError);
+          userDescription = fallbackData;
+        }
         
         if (onComplete) {
           onComplete(transcript, userDescription);

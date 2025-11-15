@@ -68,32 +68,47 @@ async function saveUserDescriptionFromWebhook(req: any, res: any) {
   try {
     console.log('ElevenLabs webhook hit', { path: req.path, body: req.body, time: new Date().toISOString() });
 
-    const { userDescription } = req.body;
-    if (!userDescription) {
-      return res.status(400).json({ error: 'Missing userDescription in request body' });
+    const { name, profession, location, availability } = req.body;
+
+    // --- CHANGE #2: Simplified validation (optional but good practice) ---
+    // We can check if at least one of the core properties exists.
+    if (!name && !profession && !location && !availability) {
+      return res.status(400).json({ error: 'Request body is missing user description properties' });
     }
 
-    const db = getDb();
+    const db = getDb(); // Assuming getDb() is defined elsewhere
+
+    // --- CHANGE #3: Build the insertData object from the new variables ---
     const insertData: any = {
-      name: userDescription.name || null,
-      profession: userDescription.profession || null,
-      location: userDescription.location || null,
-      availability: userDescription.availability || null,
-      raw_payload: JSON.stringify(userDescription),
+      // Use the variables we destructured directly from req.body
+      name: name || null,
+      profession: profession || null,
+      location: location || null,
+      availability: availability || null,
+      // The entire request body is now our raw payload
+      raw_payload: JSON.stringify(req.body), 
       created_at: db.fn.now()
     };
 
     const [id] = await db('user_descriptions').insert(insertData);
     const saved = await db('user_descriptions').where('id', id).first();
 
-    console.log(`Saved userDescription (id=${id})`);
-    return res.status(201).json({ success: true, saved });
+    console.log("Saved userDescription (id=${id})");
+
+    // --- NEW: run matching immediately and include result in response ---
+    let match = null;
+    try {
+      match = await findBestMatch(id);
+    } catch (mErr) {
+      console.warn('Error running matchingService.findBestMatch:', mErr instanceof Error ? mErr.message : mErr);
+    }
+
+    return res.status(201).json({ success: true, saved, match });
   } catch (err) {
     console.error('ElevenLabs webhook error:', err);
     return res.status(500).json({ success: false, message: err instanceof Error ? err.message : String(err) });
   }
 }
-
 // register both routes so clients using /api/... or /... work
 app.post('/webhook/elevenlabs', saveUserDescriptionFromWebhook);
 app.post('/api/webhook/elevenlabs', saveUserDescriptionFromWebhook);
