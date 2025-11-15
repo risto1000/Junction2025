@@ -86,12 +86,19 @@ function App() {
   // Fetch user profile from API
   useEffect(() => {
     const fetchUserProfile = async () => {
+      // Only fetch if we have a userId
+      const targetUserId = userId || (import.meta.env.VITE_DEFAULT_USER_ID ? parseInt(import.meta.env.VITE_DEFAULT_USER_ID) : null);
+      
+      if (!targetUserId) {
+        // No user ID - show splash screen or empty profile
+        setUserLoading(false);
+        return;
+      }
+
       try {
         setUserLoading(true);
         setUserError(null);
-        // Using default user ID of 1 - in production this would come from auth
-        const userId = import.meta.env.VITE_DEFAULT_USER_ID || '1';
-        const response = await fetch(`/api/users/${userId}`);
+        const response = await fetch(`/api/users/${targetUserId}`);
         
         if (!response.ok) {
           if (response.status === 404) {
@@ -110,20 +117,38 @@ function App() {
           age: userData.age || 0,
           tagline: userData.tagline || '',
           location: userData.location || '',
-          avatar: userData.avatar || '',
+          avatar: userData.avatar || 'https://images.unsplash.com/photo-1607990281513-2c110a25bd8c?w=400&h=400&fit=crop',
           careerHighlights: userData.career_highlights 
             ? (typeof userData.career_highlights === 'string' 
-                ? JSON.parse(userData.career_highlights) 
+                ? (() => {
+                    try {
+                      return JSON.parse(userData.career_highlights);
+                    } catch {
+                      return [];
+                    }
+                  })()
                 : userData.career_highlights)
             : [],
           achievements: userData.achievements 
             ? (typeof userData.achievements === 'string' 
-                ? JSON.parse(userData.achievements) 
+                ? (() => {
+                    try {
+                      return JSON.parse(userData.achievements);
+                    } catch {
+                      return [];
+                    }
+                  })()
                 : userData.achievements)
             : [],
           hobbies: userData.hobbies 
             ? (typeof userData.hobbies === 'string' 
-                ? JSON.parse(userData.hobbies) 
+                ? (() => {
+                    try {
+                      return JSON.parse(userData.hobbies);
+                    } catch {
+                      return [];
+                    }
+                  })()
                 : userData.hobbies)
             : [],
           microApprenticeshipOffer: userData.micro_apprenticeship_offer || '',
@@ -138,7 +163,7 @@ function App() {
     };
 
     fetchUserProfile();
-  }, []);
+  }, [userId]);
 
   const events: Event[] = [
     {

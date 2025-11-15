@@ -5,9 +5,21 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
+import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 8080;
+// Initialize ElevenLabs client
+let elevenlabs = null;
+if (process.env.ELEVENLABS_API_KEY) {
+    elevenlabs = new ElevenLabsClient({
+        apiKey: process.env.ELEVENLABS_API_KEY
+    });
+    console.log('ElevenLabs client initialized');
+}
+else {
+    console.warn('ELEVENLABS_API_KEY not set - ElevenLabs features will be disabled');
+}
 // Middleware
 app.use(cors());
 // Security headers
@@ -19,8 +31,6 @@ app.use((req, res, next) => {
     next();
 });
 app.use(express.json());
-// Note: ElevenLabs client can be initialized here if needed for server-side operations
-// For now, the frontend sends the voice profile data directly to this endpoint
 // Handle favicon requests (browsers automatically request this)
 app.get('/favicon.ico', (req, res) => {
     res.status(204).end();
@@ -42,6 +52,369 @@ app.get('/health', async (req, res) => {
             timestamp: new Date().toISOString(),
             database: 'disconnected',
             error: error instanceof Error ? error.message : 'Unknown error'
+        });
+    }
+});
+async function saveUserDescriptionFromWebhook(req, res) {
+    try {
+        console.log('ElevenLabs webhook hit', { path: req.path, body: req.body, time: new Date().toISOString() });
+        const { userDescription } = req.body;
+        if (!userDescription) {
+            return res.status(400).json({ error: 'Missing userDescription in request body' });
+        }
+        const db = getDb();
+        const insertData = {
+            name: userDescription.name || null,
+            profession: userDescription.profession || null,
+            location: userDescription.location || null,
+            availability: userDescription.availability || null,
+            raw_payload: JSON.stringify(userDescription),
+            created_at: db.fn.now()
+        };
+        const [id] = await db('user_descriptions').insert(insertData);
+        const saved = await db('user_descriptions').where('id', id).first();
+        console.log(`Saved userDescription (id=${id})`);
+        return res.status(201).json({ success: true, saved });
+    }
+    catch (err) {
+        console.error('ElevenLabs webhook error:', err);
+        return res.status(500).json({ success: false, message: err instanceof Error ? err.message : String(err) });
+    }
+}
+// register both routes so clients using /api/... or /... work
+app.post('/webhook/elevenlabs', saveUserDescriptionFromWebhook);
+app.post('/api/webhook/elevenlabs', saveUserDescriptionFromWebhook);
+// Get latest user description (for frontend to fetch after conversation)
+app.get('/api/user-descriptions/latest', async (req, res) => {
+    try {
+        const db = getDb();
+        const latest = await db('user_descriptions')
+            .orderBy('created_at', 'desc')
+            .first();
+        if (!latest) {
+            return res.status(404).json({ error: 'No user descriptions found' });
+        }
+        // Parse raw_payload if it exists
+        let parsedPayload = {};
+        if (latest.raw_payload) {
+            try {
+                parsedPayload = typeof latest.raw_payload === 'string'
+                    ? JSON.parse(latest.raw_payload)
+                    : latest.raw_payload;
+            }
+            catch (e) {
+                console.warn('Failed to parse raw_payload:', e);
+            }
+        }
+        res.json({
+            ...latest,
+            userDescription: parsedPayload
+        });
+    }
+    catch (error) {
+        console.error('Error fetching user description:', error);
+        res.status(500).json({
+            error: 'Failed to fetch user description',
+            message: error instanceof Error ? error.message : 'Unknown error'
+        });
+    }
+});
+// ElevenLabs API test endpoint - helps debug API access
+app.get('/api/conversations/test', async (req, res) => {
+    try {
+        if (!elevenlabs) {
+            return res.status(503).json({
+                error: 'ElevenLabs service unavailable',
+                message: 'ELEVENLABS_API_KEY not configured'
+            });
+        }
+        // Test API key by making a simple request
+        const testResponse = await fetch('https://api.elevenlabs.io/v1/user', {
+            method: 'GET',
+            headers: {
+                'xi-api-key': process.env.ELEVENLABS_API_KEY
+            }
+        });
+        const testData = await testResponse.json();
+        res.json({
+            success: testResponse.ok,
+            apiKeyValid: testResponse.ok,
+            status: testResponse.status,
+            userInfo: testData,
+            message: testResponse.ok
+                ? 'API key is valid. Check ElevenLabs docs for correct Conversational AI endpoint.'
+                : 'API key test failed. Check your ELEVENLABS_API_KEY.'
+        });
+    }
+    catch (error) {
+        res.status(500).json({
+            error: 'Test failed',
+            message: error instanceof Error ? error.message : 'Unknown error'
+        });
+    }
+});
+// ElevenLabs Real-Time Conversational AI - Get WebSocket connection info
+// This creates a session for in-app voice conversation (not phone calls)
+app.post('/api/conversations/start', async (req, res) => {
+    try {
+        if (!elevenlabs) {
+            return res.status(503).json({
+                error: 'ElevenLabs service unavailable',
+                message: 'ELEVENLABS_API_KEY not configured'
+            });
+        }
+        const { userId, agentId } = req.body;
+        // Get agent ID from request or environment variable
+        const agent_id = agentId || process.env.ELEVENLABS_AGENT_ID;
+        if (!agent_id) {
+            return res.status(400).json({
+                error: 'Agent ID is required',
+                message: 'Provide agentId in request body or set ELEVENLABS_AGENT_ID environment variable'
+            });
+        }
+        // Construct webhook URL for conversation completion
+        // Use HTTPS in production (Cloud Run), HTTP for local dev
+        let apiBaseUrl = process.env.API_BASE_URL || process.env.VITE_API_URL;
+        if (!apiBaseUrl) {
+            // Detect if we're in Cloud Run (production)
+            const isProduction = process.env.NODE_ENV === 'production' ||
+                req.get('host')?.includes('.run.app') ||
+                !req.get('host')?.includes('localhost');
+            const protocol = isProduction ? 'https' : (req.protocol || 'http');
+            const host = req.get('host') || req.get('x-forwarded-host') || 'localhost:8080';
+            apiBaseUrl = `${protocol}://${host}`;
+        }
+        const webhookUrl = `${apiBaseUrl}/api/webhook/elevenlabs`;
+        console.log('Starting ElevenLabs real-time conversation session:', {
+            agent_id,
+            webhookUrl,
+            userId
+        });
+        // Create a real-time conversation session using ElevenLabs API
+        // For in-app conversations, we need to get a WebSocket URL or session token
+        let conversationData;
+        let lastError = null;
+        // Try real-time conversation endpoints (for in-app voice, not phone)
+        const endpoints = [
+            'https://api.elevenlabs.io/v1/convai/conversation',
+            'https://api.elevenlabs.io/v1/convai/conversations/create',
+            'https://api.elevenlabs.io/v1/convai/real-time/create'
+        ];
+        for (const endpoint of endpoints) {
+            try {
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'xi-api-key': process.env.ELEVENLABS_API_KEY,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        agent_id: agent_id,
+                        webhook_url: webhookUrl,
+                        ...(userId && { metadata: { user_id: userId.toString() } })
+                    })
+                });
+                if (response.ok) {
+                    conversationData = await response.json();
+                    console.log(`Successfully used endpoint: ${endpoint}`);
+                    break;
+                }
+                else if (response.status !== 404 && response.status !== 405) {
+                    const errorText = await response.text();
+                    console.error(`Endpoint ${endpoint} returned ${response.status}:`, errorText);
+                    lastError = { status: response.status, message: errorText };
+                }
+            }
+            catch (err) {
+                console.error(`Error trying endpoint ${endpoint}:`, err);
+                lastError = err;
+            }
+        }
+        // If endpoints failed, try to get WebSocket connection info directly
+        if (!conversationData) {
+            try {
+                // For real-time in-app conversations, we typically need:
+                // 1. A conversation ID or session token
+                // 2. A WebSocket URL to connect to
+                // Let's try getting agent info first to understand the structure
+                const agentResponse = await fetch(`https://api.elevenlabs.io/v1/convai/agents/${agent_id}`, {
+                    method: 'GET',
+                    headers: {
+                        'xi-api-key': process.env.ELEVENLABS_API_KEY
+                    }
+                });
+                if (agentResponse.ok) {
+                    const agentInfo = await agentResponse.json();
+                    console.log('Agent info retrieved:', agentInfo);
+                    // Generate a session token or conversation ID for the frontend
+                    // The frontend will use this to connect via WebSocket
+                    conversationData = {
+                        agent_id: agent_id,
+                        session_id: `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                        websocket_url: `wss://api.elevenlabs.io/v1/convai/conversation`,
+                        agent_info: agentInfo
+                    };
+                }
+                else {
+                    const errorText = await agentResponse.text();
+                    console.error('Agent fetch error:', agentResponse.status, errorText);
+                    // If agent not found, try to list available agents
+                    if (agentResponse.status === 404) {
+                        try {
+                            const agentsListResponse = await fetch('https://api.elevenlabs.io/v1/convai/agents', {
+                                method: 'GET',
+                                headers: {
+                                    'xi-api-key': process.env.ELEVENLABS_API_KEY
+                                }
+                            });
+                            if (agentsListResponse.ok) {
+                                const agentsListData = await agentsListResponse.json();
+                                const availableAgents = agentsListData.agents?.map((a) => ({ id: a.agent_id, name: a.name })) || [];
+                                throw new Error(`Agent ID "${agent_id}" not found. Available agents: ${JSON.stringify(availableAgents)}`);
+                            }
+                        }
+                        catch (listError) {
+                            // If listing also fails, just throw the original error
+                        }
+                    }
+                    throw new Error(`Could not retrieve agent info: ${errorText}`);
+                }
+            }
+            catch (sdkError) {
+                console.error('Session creation failed:', sdkError);
+                return res.status(lastError?.status || 500).json({
+                    error: 'Failed to start conversation session',
+                    message: lastError?.message || 'Could not create conversation session.',
+                    details: {
+                        triedEndpoints: endpoints,
+                        agentId: agent_id,
+                        webhookUrl: webhookUrl
+                    },
+                    troubleshooting: [
+                        '1. Verify your ELEVENLABS_AGENT_ID is correct in your ElevenLabs dashboard',
+                        '2. Check the ElevenLabs API documentation for Real-Time Conversational AI',
+                        '3. Ensure your API key has access to Conversational AI features',
+                        '4. Test your API key: GET /api/conversations/test',
+                        '5. For in-app voice, you may need to use the ElevenLabs React SDK on the frontend'
+                    ],
+                    documentation: 'https://elevenlabs.io/docs/agents-platform/integrate/overview'
+                });
+            }
+        }
+        console.log('Conversation session created successfully:', conversationData);
+        // Log to database
+        try {
+            const db = getDb();
+            await db('webhook_logs').insert({
+                event_type: 'conversation.session_created',
+                source: 'elevenlabs',
+                payload: JSON.stringify({
+                    session_id: conversationData.session_id || conversationData.id,
+                    user_id: userId,
+                    agent_id: agent_id,
+                    type: 'real-time_in-app'
+                }),
+                created_at: db.fn.now()
+            });
+        }
+        catch (logError) {
+            console.warn('Failed to log conversation session:', logError);
+        }
+        // Return session info for frontend to connect
+        res.json({
+            success: true,
+            session_id: conversationData.session_id || conversationData.id || conversationData.conversation_id,
+            agent_id: agent_id,
+            websocket_url: conversationData.websocket_url || conversationData.ws_url || 'wss://api.elevenlabs.io/v1/convai/conversation',
+            api_key: process.env.ELEVENLABS_API_KEY?.trim(), // Frontend will need this for WebSocket auth
+            webhook_url: webhookUrl,
+            message: 'Use the websocket_url and api_key to connect from the frontend'
+        });
+    }
+    catch (error) {
+        console.error('Error starting conversation session:', error);
+        res.status(500).json({
+            error: 'Failed to start conversation session',
+            message: error instanceof Error ? error.message : 'Unknown error'
+        });
+    }
+});
+// Get signed URL for ElevenLabs widget (required for widget embed)
+app.get('/api/conversations/signed-url', async (req, res) => {
+    try {
+        if (!elevenlabs) {
+            return res.status(503).json({
+                error: 'ElevenLabs service unavailable',
+                message: 'ELEVENLABS_API_KEY not configured'
+            });
+        }
+        const agentId = req.query.agentId || process.env.ELEVENLABS_AGENT_ID;
+        if (!agentId) {
+            return res.status(400).json({
+                error: 'Agent ID is required',
+                message: 'Provide agentId as query parameter or set ELEVENLABS_AGENT_ID environment variable'
+            });
+        }
+        const response = await fetch(`https://api.elevenlabs.io/v1/convai/conversation/get-signed-url?agent_id=${encodeURIComponent(agentId)}`, {
+            headers: {
+                'xi-api-key': process.env.ELEVENLABS_API_KEY.trim()
+            }
+        });
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Failed to get signed URL:', response.status, errorText);
+            return res.status(response.status).json({
+                error: 'Failed to get signed URL',
+                message: errorText
+            });
+        }
+        const body = await response.json();
+        res.json({
+            success: true,
+            signed_url: body.signed_url || body.signedUrl || body.url,
+            agent_id: agentId
+        });
+    }
+    catch (error) {
+        console.error('Error getting signed URL:', error);
+        res.status(500).json({
+            error: 'Failed to get signed URL',
+            message: error instanceof Error ? error.message : 'Unknown error'
+        });
+    }
+});
+// Get conversation status endpoint
+app.get('/api/conversations/:conversationId', async (req, res) => {
+    try {
+        if (!elevenlabs) {
+            return res.status(503).json({
+                error: 'ElevenLabs service unavailable',
+                message: 'ELEVENLABS_API_KEY not configured'
+            });
+        }
+        const { conversationId } = req.params;
+        const response = await fetch(`https://api.elevenlabs.io/v1/convai/conversations/${conversationId}`, {
+            method: 'GET',
+            headers: {
+                'xi-api-key': process.env.ELEVENLABS_API_KEY,
+                'Content-Type': 'application/json'
+            }
+        });
+        if (!response.ok) {
+            const errorText = await response.text();
+            return res.status(response.status).json({
+                error: 'Failed to get conversation status',
+                message: errorText
+            });
+        }
+        const conversationData = await response.json();
+        res.json(conversationData);
+    }
+    catch (error) {
+        console.error('Error getting conversation status:', error);
+        res.status(500).json({
+            error: 'Failed to get conversation status',
+            message: error instanceof Error ? error.message : 'Unknown error'
         });
     }
 });

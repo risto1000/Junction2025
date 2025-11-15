@@ -46,6 +46,8 @@ DB_USER="root"
 DB_PASS="Kanakissa1!"
 DB_NAME="junction2025"
 ELEVENLABS_API_KEY="your-elevenlabs-api-key-here"
+ELEVENLABS_AGENT_ID="your-agent-id-here"  # Optional: can also be passed in API request
+API_BASE_URL="https://your-deployed-api-url.com"  # Optional: auto-detected if not set
 ```
 
 ### 4. Install Dependencies
@@ -182,6 +184,11 @@ Once deployed, your API will be available at:
 - `POST /api/favorites` - Add favorite
 - `DELETE /api/favorites` - Remove favorite
 - `POST /webhook` - Webhook endpoint
+- `POST /api/conversations/start` - Start ElevenLabs Conversational AI conversation
+  - Body: `{ phoneNumber: string, userId?: number, agentId?: string }`
+  - Returns: `{ success: boolean, conversation_id: string, status: string, webhook_url: string }`
+- `GET /api/conversations/:conversationId` - Get conversation status
+- `POST /api/webhook/elevenlabs` - ElevenLabs webhook endpoint (receives conversation results)
 
 ## Troubleshooting
 
@@ -209,6 +216,9 @@ Once deployed, your API will be available at:
 
 - Create a secret in Google Cloud Secret Manager named `elevenlabs-api-key`
 - Add your ElevenLabs API key as the secret value
-- The backend will use this to create voice profiles when users record their profile
-- The `voice_profile_id` column stores the ElevenLabs voice profile ID for each user
+- Create a Conversational AI agent in ElevenLabs dashboard and get the agent ID
+- Optionally create a secret named `elevenlabs-agent-id` with your agent ID (or pass it in API requests)
+- The backend will use this to start voice conversations when users initiate voice onboarding
+- The webhook endpoint `/api/webhook/elevenlabs` receives the conversation results and user descriptions
+- The `user_descriptions` table stores the extracted user information from conversations
 

@@ -24,7 +24,7 @@ gcloud run deploy $SERVICE_NAME \
   --project $PROJECT_ID \
   --allow-unauthenticated \
   --add-cloudsql-instances $INSTANCE_CONNECTION_NAME \
-  --set-env-vars DB_NAME=junction2025,DB_USER=root,INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,NODE_ENV=production \
+  --set-env-vars DB_NAME=junction2025,DB_USER=root,INSTANCE_CONNECTION_NAME=$INSTANCE_CONNECTION_NAME,NODE_ENV=production,ELEVENLABS_AGENT_ID=agent_5901ka39kp8vf3j88v13q8a2n0k5 \
   --set-secrets DB_PASS=junction2025-db-password:latest \
   --set-secrets ELEVENLABS_API_KEY=elevenlabs-api-key:latest \
   --service-account $SERVICE_ACCOUNT \

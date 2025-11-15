@@ -1,8 +1,19 @@
-import { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Search, SlidersHorizontal, Heart, MapPin, Users, Mic, Map, Plus } from 'lucide-react';
 import type { Event } from '../App';
 import { MapView } from './MapView';
 import { HostEventModal } from './HostEventModal';
+
+// Declare custom element for TypeScript
+declare global {
+  namespace JSX {
+    interface IntrinsicElements {
+      'elevenlabs-convai': React.DetailedHTMLProps<React.HTMLAttributes<HTMLElement>, HTMLElement> & {
+        'agent-id'?: string;
+      };
+    }
+  }
+}
 
 interface EventsScreenProps {
   events: Event[];
@@ -16,6 +27,23 @@ export function EventsScreen({ events, favorites, onToggleFavorite, onEventSelec
   const [showFilters, setShowFilters] = useState(false);
   const [showMapView, setShowMapView] = useState(false);
   const [showHostEventModal, setShowHostEventModal] = useState(false);
+
+  // Load ElevenLabs widget script
+  useEffect(() => {
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/@elevenlabs/convai-widget-embed';
+    script.async = true;
+    script.type = 'text/javascript';
+    document.body.appendChild(script);
+
+    return () => {
+      // Cleanup: remove script on unmount if needed
+      const existingScript = document.querySelector('script[src="https://unpkg.com/@elevenlabs/convai-widget-embed"]');
+      if (existingScript) {
+        existingScript.remove();
+      }
+    };
+  }, []);
 
   const featuredEvents = events.slice(0, 2);
   const regularEvents = events.slice(2);
@@ -259,11 +287,9 @@ export function EventsScreen({ events, favorites, onToggleFavorite, onEventSelec
         </div>
       </div>
 
-      {/* Floating Voice Button */}
-      <button className="fixed bottom-[106px] right-4 w-14 h-14 bg-[#FF7A6C] rounded-full shadow-lg flex items-center justify-center active:scale-95 transition-transform">
-        <Mic className="w-6 h-6 text-white" />
-      </button>
-
+      {/* ElevenLabs Voice Widget */}
+      <elevenlabs-convai agent-id="agent_5901ka39kp8vf3j88v13q8a2n0k5"></elevenlabs-convai>
+      
       {/* Floating Map Button */}
       <button 
         onClick={() => setShowMapView(true)}

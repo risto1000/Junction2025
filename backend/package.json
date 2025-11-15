@@ -4,26 +4,27 @@
     "type": "module",
     "main": "server.ts",
     "scripts": {
-      "dev": "tsx watch server.ts",
-      "build": "tsc",
-      "start": "node dist/server.js",
-      "migrate": "tsx migrate.ts",
-      "test:db": "tsx test-db-init.ts"
+        "dev": "tsx watch server.ts",
+        "build": "tsc",
+        "start": "node dist/server.js",
+        "migrate": "tsx migrate.ts",
+        "test:db": "tsx test-db-init.ts"
     },
     "dependencies": {
-      "express": "^4.18.2",
-      "cors": "^2.8.5",
-      "knex": "^3.1.0",
-      "mysql2": "^3.11.5",
-      "@google-cloud/cloud-sql-connector": "^1.5.0",
-      "@google/generative-ai": "^0.2.0",
-      "dotenv": "^16.3.1"
+        "@elevenlabs/elevenlabs-js": "^2.24.1",
+        "@google-cloud/cloud-sql-connector": "^1.5.0",
+        "@google/generative-ai": "^0.2.0",
+        "cors": "^2.8.5",
+        "dotenv": "^16.3.1",
+        "express": "^4.18.2",
+        "knex": "^3.1.0",
+        "mysql2": "^3.11.5"
     },
     "devDependencies": {
-      "@types/express": "^4.17.21",
-      "@types/cors": "^2.8.17",
-      "@types/node": "^20.10.0",
-      "tsx": "^4.7.0",
-      "typescript": "^5.8.2"
+        "@types/cors": "^2.8.17",
+        "@types/express": "^4.17.21",
+        "@types/node": "^20.10.0",
+        "tsx": "^4.7.0",
+        "typescript": "^5.8.2"
     }
-  }
+}
