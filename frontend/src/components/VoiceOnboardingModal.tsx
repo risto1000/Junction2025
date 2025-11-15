@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
 import { X, Mic, Check } from 'lucide-react';
+import { createVoiceProfile } from '../utils/api';
 
 interface VoiceOnboardingModalProps {
+  userId?: number | null;
   onComplete: (profileData: any) => void;
   onClose: () => void;
 }
@@ -14,12 +16,19 @@ const steps = [
   { id: 5, title: 'Safety preferences', question: "What would make you feel safe?" },
 ];
 
-export function VoiceOnboardingModal({ onComplete, onClose }: VoiceOnboardingModalProps) {
+export function VoiceOnboardingModal({ userId, onComplete, onClose }: VoiceOnboardingModalProps) {
   const [currentStep, setCurrentStep] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
   const [waveformHeights, setWaveformHeights] = useState(Array(20).fill(0));
   const [showEditScreen, setShowEditScreen] = useState(false);
   const [transcripts, setTranscripts] = useState<string[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [editFormData, setEditFormData] = useState({
+    name: 'Jari Koskinen',
+    tagline: 'Retired carpenter — loves walks & woodworking',
+    location: 'Helsinki, Finland',
+    hobbies: ['Woodworking', 'Duck Walks', 'Swimming', 'Knitting']
+  });
 
   // Simulate voice recording animation
   useEffect(() => {
@@ -59,13 +68,55 @@ export function VoiceOnboardingModal({ onComplete, onClose }: VoiceOnboardingMod
     }
   }, [currentStep, showEditScreen]);
 
-  const handleFinish = () => {
-    onComplete({
-      name: 'Jari Koskinen',
-      age: 68,
-      tagline: 'Retired carpenter — loves walks & woodworking',
-      location: 'Helsinki, Finland',
-    });
+  const handleFinish = async () => {
+    setIsSubmitting(true);
+    try {
+      // Prepare profile data from ElevenLabs output and user edits
+      // In a real implementation, this would come from ElevenLabs API response
+      const elevenLabsProfileData = {
+        voice_profile_id: `voice_${Date.now()}`, // This would come from ElevenLabs API
+        full_name: editFormData.name,
+        age: 68, // This would come from ElevenLabs analysis
+        tagline: editFormData.tagline,
+        location: editFormData.location,
+        hobbies: editFormData.hobbies,
+        career_highlights: [
+          { company: 'Helsinki Construction', title: 'Master Carpenter', years: '1978-2015' }
+        ],
+        achievements: ['Master Carpenter', 'Community Mentor'],
+        // Additional data from ElevenLabs would be included here
+      };
+
+      // Send to backend API
+      const userData = await createVoiceProfile(elevenLabsProfileData, userId || undefined);
+      
+      // Transform backend response to frontend format
+      const profileData = {
+        id: userData.id,
+        name: userData.full_name || editFormData.name,
+        age: userData.age || 68,
+        tagline: userData.tagline || editFormData.tagline,
+        location: userData.location || editFormData.location,
+        avatar: userData.avatar || 'https://images.unsplash.com/photo-1607990281513-2c110a25bd8c?w=400&h=400&fit=crop',
+        careerHighlights: Array.isArray(userData.career_highlights) 
+          ? userData.career_highlights 
+          : (typeof userData.career_highlights === 'string' ? JSON.parse(userData.career_highlights) : []),
+        achievements: Array.isArray(userData.achievements)
+          ? userData.achievements
+          : (typeof userData.achievements === 'string' ? JSON.parse(userData.achievements) : []),
+        hobbies: Array.isArray(userData.hobbies)
+          ? userData.hobbies
+          : (typeof userData.hobbies === 'string' ? JSON.parse(userData.hobbies) : editFormData.hobbies),
+        microApprenticeshipOffer: userData.micro_apprenticeship_offer || '',
+        offeringApprenticeship: userData.offering_apprenticeship || false,
+      };
+
+      onComplete(profileData);
+    } catch (error) {
+      console.error('Error creating voice profile:', error);
+      alert('Failed to create profile. Please try again.');
+      setIsSubmitting(false);
+    }
   };
 
   if (showEditScreen) {
@@ -89,7 +140,8 @@ export function VoiceOnboardingModal({ onComplete, onClose }: VoiceOnboardingMod
               <label className="text-[#5D6A6A]">Name</label>
               <input
                 type="text"
-                defaultValue="Jari Koskinen"
+                value={editFormData.name}
+                onChange={(e) => setEditFormData(prev => ({ ...prev, name: e.target.value }))}
                 className="w-full h-12 px-4 bg-[#F5F3EF] rounded-xl text-[#0B1A1A] border-2 border-transparent focus:border-[#0A8F86] outline-none"
               />
             </div>
@@ -98,7 +150,8 @@ export function VoiceOnboardingModal({ onComplete, onClose }: VoiceOnboardingMod
               <label className="text-[#5D6A6A]">Tagline</label>
               <input
                 type="text"
-                defaultValue="Retired carpenter — loves walks & woodworking"
+                value={editFormData.tagline}
+                onChange={(e) => setEditFormData(prev => ({ ...prev, tagline: e.target.value }))}
                 className="w-full h-12 px-4 bg-[#F5F3EF] rounded-xl text-[#0B1A1A] border-2 border-transparent focus:border-[#0A8F86] outline-none"
               />
             </div>
@@ -107,7 +160,8 @@ export function VoiceOnboardingModal({ onComplete, onClose }: VoiceOnboardingMod
               <label className="text-[#5D6A6A]">Location</label>
               <input
                 type="text"
-                defaultValue="Helsinki, Finland"
+                value={editFormData.location}
+                onChange={(e) => setEditFormData(prev => ({ ...prev, location: e.target.value }))}
                 className="w-full h-12 px-4 bg-[#F5F3EF] rounded-xl text-[#0B1A1A] border-2 border-transparent focus:border-[#0A8F86] outline-none"
               />
             </div>
@@ -115,8 +169,8 @@ export function VoiceOnboardingModal({ onComplete, onClose }: VoiceOnboardingMod
             <div className="space-y-2">
               <label className="text-[#5D6A6A]">Hobbies (from voice)</label>
               <div className="flex flex-wrap gap-2">
-                {['Woodworking', 'Duck Walks', 'Swimming', 'Knitting'].map((hobby) => (
-                  <div key={hobby} className="px-4 py-2 bg-[#0A8F86]/10 text-[#0A8F86] rounded-full">
+                {editFormData.hobbies.map((hobby, idx) => (
+                  <div key={idx} className="px-4 py-2 bg-[#0A8F86]/10 text-[#0A8F86] rounded-full">
                     {hobby}
                   </div>
                 ))}
@@ -135,10 +189,11 @@ export function VoiceOnboardingModal({ onComplete, onClose }: VoiceOnboardingMod
           <div className="sticky bottom-0 bg-white border-t border-[#E8E6E3] p-6 rounded-b-3xl">
             <button
               onClick={handleFinish}
-              className="w-full h-14 bg-[#0A8F86] text-white rounded-2xl flex items-center justify-center gap-2 active:scale-[0.98] transition-transform"
+              disabled={isSubmitting}
+              className="w-full h-14 bg-[#0A8F86] text-white rounded-2xl flex items-center justify-center gap-2 active:scale-[0.98] transition-transform disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Check className="w-5 h-5" />
-              <span>Looks good — Create profile</span>
+              <span>{isSubmitting ? 'Creating profile...' : userId ? 'Update profile' : 'Looks good — Create profile'}</span>
             </button>
           </div>
         </div>

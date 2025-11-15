@@ -19,6 +19,8 @@ app.use((req, res, next) => {
     next();
 });
 app.use(express.json());
+// Note: ElevenLabs client can be initialized here if needed for server-side operations
+// For now, the frontend sends the voice profile data directly to this endpoint
 // Handle favicon requests (browsers automatically request this)
 app.get('/favicon.ico', (req, res) => {
     res.status(204).end();
@@ -274,6 +276,108 @@ app.put('/api/users/:id', async (req, res) => {
     catch (error) {
         console.error('Error updating user:', error);
         res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// API Route - Voice Profile Creation/Update
+app.post('/api/users/voice-profile', async (req, res) => {
+    try {
+        const { user_id, voice_profile_id, full_name, first_name, last_name, age, tagline, location, avatar, career_highlights, achievements, hobbies, micro_apprenticeship_offer, offering_apprenticeship } = req.body;
+        const db = getDb();
+        // Prepare user data from ElevenLabs output
+        const userData = {
+            updated_at: db.fn.now()
+        };
+        if (full_name !== undefined)
+            userData.full_name = full_name;
+        if (first_name !== undefined)
+            userData.first_name = first_name;
+        if (last_name !== undefined)
+            userData.last_name = last_name;
+        if (age !== undefined)
+            userData.age = age;
+        if (tagline !== undefined)
+            userData.tagline = tagline;
+        if (location !== undefined)
+            userData.location = location;
+        if (avatar !== undefined)
+            userData.avatar = avatar;
+        if (voice_profile_id !== undefined)
+            userData.voice_profile_id = voice_profile_id;
+        if (career_highlights !== undefined) {
+            userData.career_highlights = typeof career_highlights === 'string'
+                ? career_highlights
+                : JSON.stringify(career_highlights);
+        }
+        if (achievements !== undefined) {
+            userData.achievements = typeof achievements === 'string'
+                ? achievements
+                : JSON.stringify(achievements);
+        }
+        if (hobbies !== undefined) {
+            userData.hobbies = typeof hobbies === 'string'
+                ? hobbies
+                : JSON.stringify(hobbies);
+        }
+        if (micro_apprenticeship_offer !== undefined)
+            userData.micro_apprenticeship_offer = micro_apprenticeship_offer;
+        if (offering_apprenticeship !== undefined)
+            userData.offering_apprenticeship = offering_apprenticeship;
+        let user;
+        if (user_id) {
+            // Update existing user
+            await db('users')
+                .where('id', user_id)
+                .update(userData);
+            user = await db('users').where('id', user_id).first();
+            if (!user) {
+                return res.status(404).json({ error: 'User not found' });
+            }
+        }
+        else {
+            // Create new user
+            userData.created_at = db.fn.now();
+            const [id] = await db('users').insert(userData);
+            user = await db('users').where('id', id).first();
+        }
+        // Parse JSON fields for response
+        if (user.career_highlights) {
+            try {
+                user.career_highlights = typeof user.career_highlights === 'string'
+                    ? JSON.parse(user.career_highlights)
+                    : user.career_highlights;
+            }
+            catch (e) {
+                // Keep as is if parsing fails
+            }
+        }
+        if (user.achievements) {
+            try {
+                user.achievements = typeof user.achievements === 'string'
+                    ? JSON.parse(user.achievements)
+                    : user.achievements;
+            }
+            catch (e) {
+                // Keep as is if parsing fails
+            }
+        }
+        if (user.hobbies) {
+            try {
+                user.hobbies = typeof user.hobbies === 'string'
+                    ? JSON.parse(user.hobbies)
+                    : user.hobbies;
+            }
+            catch (e) {
+                // Keep as is if parsing fails
+            }
+        }
+        res.status(user_id ? 200 : 201).json(user);
+    }
+    catch (error) {
+        console.error('Error creating/updating voice profile:', error);
+        res.status(500).json({
+            error: 'Internal server error',
+            message: error instanceof Error ? error.message : 'Unknown error'
+        });
     }
 });
 // API Routes - RSVPs
