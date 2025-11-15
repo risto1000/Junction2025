@@ -52,6 +52,41 @@ app.get('/health', async (req, res) => {
   }
 });
 
+
+async function saveUserDescriptionFromWebhook(req: any, res: any) {
+  try {
+    console.log('ElevenLabs webhook hit', { path: req.path, body: req.body, time: new Date().toISOString() });
+
+    const { userDescription } = req.body;
+    if (!userDescription) {
+      return res.status(400).json({ error: 'Missing userDescription in request body' });
+    }
+
+    const db = getDb();
+    const insertData: any = {
+      name: userDescription.name || null,
+      profession: userDescription.profession || null,
+      location: userDescription.location || null,
+      availability: userDescription.availability || null,
+      raw_payload: JSON.stringify(userDescription),
+      created_at: db.fn.now()
+    };
+
+    const [id] = await db('user_descriptions').insert(insertData);
+    const saved = await db('user_descriptions').where('id', id).first();
+
+    console.log(`Saved userDescription (id=${id})`);
+    return res.status(201).json({ success: true, saved });
+  } catch (err) {
+    console.error('ElevenLabs webhook error:', err);
+    return res.status(500).json({ success: false, message: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+// register both routes so clients using /api/... or /... work
+app.post('/webhook/elevenlabs', saveUserDescriptionFromWebhook);
+app.post('/api/webhook/elevenlabs', saveUserDescriptionFromWebhook);
+
 // Webhook endpoint
 app.post('/webhook', async (req, res) => {
   try {
