@@ -29,7 +29,7 @@ export async function initDb(): Promise<Knex> {
 
     const clientOpts = await connector.getOptions({
       instanceConnectionName: instanceConnectionName,
-      ipType: 'PUBLIC',
+      ipType: 'PUBLIC' as any,
     });
 
     connectionConfig = {

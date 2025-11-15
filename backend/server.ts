@@ -2,6 +2,9 @@ import express from 'express';
 import cors from 'cors';
 import { initDb, getDb } from './database.js';
 import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { existsSync } from 'fs';
 
 dotenv.config();
 
@@ -10,7 +13,22 @@ const PORT = process.env.PORT || 8080;
 
 // Middleware
 app.use(cors());
+
+// Security headers
+app.use((req, res, next) => {
+  // Set permissive CSP for API endpoints (Cloud Run may override this)
+  if (req.path.startsWith('/api') || req.path === '/health') {
+    res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data: https:;");
+  }
+  next();
+});
+
 app.use(express.json());
+
+// Handle favicon requests (browsers automatically request this)
+app.get('/favicon.ico', (req, res) => {
+  res.status(204).end();
+});
 
 // Health check endpoint
 app.get('/health', async (req, res) => {
@@ -418,6 +436,45 @@ app.delete('/api/favorites', async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// Serve static files from frontend build (if exists)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Try multiple possible paths for frontend build
+const possiblePaths = [
+  path.join(__dirname, '../frontend/build'),  // From backend/dist -> ../frontend/build
+  path.join(process.cwd(), '../frontend/build'), // From backend/ -> ../frontend/build
+  path.join(process.cwd(), 'frontend/build'),   // From app root -> frontend/build
+  '/app/frontend/build'                         // Absolute path in Docker
+];
+
+let frontendBuildPath: string | null = null;
+for (const possiblePath of possiblePaths) {
+  if (existsSync(possiblePath)) {
+    frontendBuildPath = possiblePath;
+    console.log(`Found frontend build at: ${frontendBuildPath}`);
+    break;
+  }
+}
+
+if (frontendBuildPath) {
+  app.use(express.static(frontendBuildPath));
+  
+  // Serve React app for all non-API routes (SPA routing)
+  app.get('*', (req, res) => {
+    // Don't serve frontend for API routes
+    if (req.path.startsWith('/api') || req.path === '/health' || req.path === '/favicon.ico') {
+      return;
+    }
+    res.sendFile(path.join(frontendBuildPath!, 'index.html'));
+  });
+  
+  console.log('Frontend static files enabled');
+} else {
+  console.log('Frontend build not found, serving API only');
+  console.log('Checked paths:', possiblePaths);
+}
 
 // Initialize database and start server
 initDb()
