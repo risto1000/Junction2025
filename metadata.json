@@ -1,5 +1,0 @@
-{
-  "name": "Generations Connect",
-  "description": "A web application to facilitate a mentorship program connecting elderly mentors with young learners. Learners can sign up, and an intelligent matching system powered by Gemini suggests the best mentor-learner pairings.",
-  "requestFramePermissions": []
-}

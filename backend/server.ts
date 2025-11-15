@@ -1,0 +1,440 @@
+import express from 'express';
+import cors from 'cors';
+import { Pool } from 'pg';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const app = express();
+const PORT = process.env.PORT || 8080;
+
+// Google Cloud SQL connection configuration
+const pool = new Pool({
+  // For local development, use TCP connection
+  // For Cloud Run, use Unix socket
+  host: process.env.NODE_ENV === 'production' 
+    ? `/cloudsql/${process.env.CLOUD_SQL_CONNECTION_NAME}`
+    : process.env.DB_HOST || 'localhost',
+  database: process.env.DB_NAME || 'apprentice_circles',
+  user: process.env.DB_USER || 'postgres',
+  password: process.env.DB_PASSWORD,
+  port: parseInt(process.env.DB_PORT || '5432'),
+  // For Cloud SQL Unix socket, don't specify port
+  ...(process.env.NODE_ENV === 'production' && {
+    port: undefined,
+  }),
+});
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// Health check endpoint
+app.get('/health', async (req, res) => {
+  try {
+    // Test database connection
+    await pool.query('SELECT 1');
+    res.json({ 
+      status: 'ok', 
+      timestamp: new Date().toISOString(),
+      database: 'connected'
+    });
+  } catch (error) {
+    res.status(503).json({ 
+      status: 'error', 
+      timestamp: new Date().toISOString(),
+      database: 'disconnected',
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// Webhook endpoint
+app.post('/webhook', async (req, res) => {
+  try {
+    const { event, data, source } = req.body;
+    
+    console.log('Webhook received:', { event, source, timestamp: new Date().toISOString() });
+    
+    // Log webhook to database
+    await pool.query(
+      'INSERT INTO webhook_logs (event_type, source, payload, created_at) VALUES ($1, $2, $3, NOW())',
+      [event, source || 'unknown', JSON.stringify(data || req.body)]
+    );
+    
+    // Handle different webhook events
+    switch (event) {
+      case 'event.created':
+        await handleEventCreated(data);
+        break;
+      case 'event.updated':
+        await handleEventUpdated(data);
+        break;
+      case 'rsvp.created':
+        await handleRSVPCreated(data);
+        break;
+      case 'user.created':
+        await handleUserCreated(data);
+        break;
+      case 'profile.updated':
+        await handleProfileUpdated(data);
+        break;
+      default:
+        console.log('Unhandled webhook event:', event);
+    }
+    
+    res.status(200).json({ 
+      success: true, 
+      message: 'Webhook processed',
+      event,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Webhook error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Internal server error',
+      message: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// Webhook event handlers
+async function handleEventCreated(data: any) {
+  if (data && data.id) {
+    console.log('Processing event.created for event:', data.id);
+    // Add any custom logic here, e.g., send notifications
+  }
+}
+
+async function handleEventUpdated(data: any) {
+  if (data && data.id) {
+    console.log('Processing event.updated for event:', data.id);
+  }
+}
+
+async function handleRSVPCreated(data: any) {
+  if (data && data.eventId && data.userId) {
+    console.log('Processing rsvp.created for event:', data.eventId, 'user:', data.userId);
+    // Update event spaces left
+    await pool.query(
+      'UPDATE events SET spaces_left = spaces_left - 1 WHERE id = $1 AND spaces_left > 0',
+      [data.eventId]
+    );
+  }
+}
+
+async function handleUserCreated(data: any) {
+  if (data && data.id) {
+    console.log('Processing user.created for user:', data.id);
+  }
+}
+
+async function handleProfileUpdated(data: any) {
+  if (data && data.userId) {
+    console.log('Processing profile.updated for user:', data.userId);
+  }
+}
+
+// API Routes - Events
+app.get('/api/events', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        e.*,
+        u.full_name as organizer_name,
+        u.avatar as organizer_avatar,
+        u.badge as organizer_badge,
+        u.bio as organizer_bio,
+        COUNT(DISTINCT r.id) as rsvp_count
+      FROM events e
+      LEFT JOIN users u ON e.organizer_id = u.id
+      LEFT JOIN rsvps r ON e.id = r.event_id
+      GROUP BY e.id, u.id
+      ORDER BY e.created_at DESC
+    `);
+    
+    // Format events with participants
+    const events = await Promise.all(result.rows.map(async (event) => {
+      const participants = await pool.query(
+        `SELECT u.id, u.first_name, u.last_name, u.avatar 
+         FROM rsvps r
+         JOIN users u ON r.user_id = u.id
+         WHERE r.event_id = $1
+         LIMIT 10`,
+        [event.id]
+      );
+      return {
+        ...event,
+        participantDetails: participants.rows.map(p => ({
+          id: p.id,
+          firstName: p.first_name,
+          lastName: p.last_name,
+          avatar: p.avatar
+        })),
+        participants: participants.rows.map(p => p.avatar)
+      };
+    }));
+    
+    res.json(events);
+  } catch (error) {
+    console.error('Error fetching events:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/events/:id', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        e.*,
+        u.full_name as organizer_name,
+        u.avatar as organizer_avatar,
+        u.badge as organizer_badge,
+        u.bio as organizer_bio
+      FROM events e
+      LEFT JOIN users u ON e.organizer_id = u.id
+      WHERE e.id = $1
+    `, [req.params.id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+    
+    const event = result.rows[0];
+    
+    // Get participants
+    const participants = await pool.query(
+      `SELECT u.id, u.first_name, u.last_name, u.avatar 
+       FROM rsvps r
+       JOIN users u ON r.user_id = u.id
+       WHERE r.event_id = $1`,
+      [event.id]
+    );
+    
+    res.json({
+      ...event,
+      participantDetails: participants.rows.map(p => ({
+        id: p.id,
+        firstName: p.first_name,
+        lastName: p.last_name,
+        avatar: p.avatar
+      })),
+      participants: participants.rows.map(p => p.avatar)
+    });
+  } catch (error) {
+    console.error('Error fetching event:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/events', async (req, res) => {
+  try {
+    const {
+      title,
+      organizer_id,
+      time,
+      date,
+      location,
+      description,
+      latitude,
+      longitude,
+      capacity,
+      is_micro_apprenticeship,
+      accessibility_notes,
+      age_suitability,
+      image
+    } = req.body;
+    
+    const result = await pool.query(
+      `INSERT INTO events (
+        title, organizer_id, time, date, location, description,
+        latitude, longitude, capacity, spaces_left,
+        is_micro_apprenticeship, accessibility_notes, age_suitability, image, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, NOW())
+      RETURNING *`,
+      [
+        title, organizer_id, time, date, location, description,
+        latitude, longitude, capacity, is_micro_apprenticeship,
+        accessibility_notes, age_suitability, image
+      ]
+    );
+    
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error('Error creating event:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// API Routes - Users/Profiles
+app.get('/api/users/:id', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM users WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error fetching user:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.put('/api/users/:id', async (req, res) => {
+  try {
+    const {
+      full_name,
+      age,
+      tagline,
+      location,
+      avatar,
+      career_highlights,
+      achievements,
+      hobbies,
+      micro_apprenticeship_offer,
+      offering_apprenticeship
+    } = req.body;
+    
+    const result = await pool.query(
+      `UPDATE users SET
+        full_name = COALESCE($1, full_name),
+        age = COALESCE($2, age),
+        tagline = COALESCE($3, tagline),
+        location = COALESCE($4, location),
+        avatar = COALESCE($5, avatar),
+        career_highlights = COALESCE($6, career_highlights),
+        achievements = COALESCE($7, achievements),
+        hobbies = COALESCE($8, hobbies),
+        micro_apprenticeship_offer = COALESCE($9, micro_apprenticeship_offer),
+        offering_apprenticeship = COALESCE($10, offering_apprenticeship),
+        updated_at = NOW()
+      WHERE id = $11
+      RETURNING *`,
+      [
+        full_name, age, tagline, location, avatar,
+        JSON.stringify(career_highlights),
+        JSON.stringify(achievements),
+        JSON.stringify(hobbies),
+        micro_apprenticeship_offer,
+        offering_apprenticeship,
+        req.params.id
+      ]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error updating user:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// API Routes - RSVPs
+app.post('/api/rsvps', async (req, res) => {
+  try {
+    const { event_id, user_id, invite_family } = req.body;
+    
+    // Check if already RSVP'd
+    const existing = await pool.query(
+      'SELECT id FROM rsvps WHERE event_id = $1 AND user_id = $2',
+      [event_id, user_id]
+    );
+    
+    if (existing.rows.length > 0) {
+      return res.status(400).json({ error: 'Already RSVP\'d to this event' });
+    }
+    
+    // Check if event has space
+    const event = await pool.query('SELECT spaces_left FROM events WHERE id = $1', [event_id]);
+    if (event.rows.length === 0) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+    if (event.rows[0].spaces_left <= 0) {
+      return res.status(400).json({ error: 'Event is full' });
+    }
+    
+    const result = await pool.query(
+      `INSERT INTO rsvps (event_id, user_id, invite_family, created_at)
+       VALUES ($1, $2, $3, NOW())
+       RETURNING *`,
+      [event_id, user_id, invite_family || false]
+    );
+    
+    // Update event spaces_left
+    await pool.query(
+      'UPDATE events SET spaces_left = spaces_left - 1 WHERE id = $1',
+      [event_id]
+    );
+    
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error('Error creating RSVP:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// API Routes - Favorites
+app.get('/api/users/:id/favorites', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT e.* FROM favorites f
+       JOIN events e ON f.event_id = e.id
+       WHERE f.user_id = $1
+       ORDER BY f.created_at DESC`,
+      [req.params.id]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching favorites:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/favorites', async (req, res) => {
+  try {
+    const { event_id, user_id } = req.body;
+    
+    const result = await pool.query(
+      `INSERT INTO favorites (event_id, user_id, created_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (event_id, user_id) DO NOTHING
+       RETURNING *`,
+      [event_id, user_id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(200).json({ message: 'Already favorited' });
+    }
+    
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error('Error creating favorite:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.delete('/api/favorites', async (req, res) => {
+  try {
+    const { event_id, user_id } = req.body;
+    
+    await pool.query(
+      'DELETE FROM favorites WHERE event_id = $1 AND user_id = $2',
+      [event_id, user_id]
+    );
+    
+    res.status(200).json({ message: 'Favorite removed' });
+  } catch (error) {
+    console.error('Error removing favorite:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+});
