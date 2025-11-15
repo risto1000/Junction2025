@@ -59,18 +59,25 @@ async function saveUserDescriptionFromWebhook(req: any, res: any) {
   try {
     console.log('ElevenLabs webhook hit', { path: req.path, body: req.body, time: new Date().toISOString() });
 
-    const { userDescription } = req.body;
-    if (!userDescription) {
-      return res.status(400).json({ error: 'Missing userDescription in request body' });
+    const { name, profession, location, availability } = req.body;
+
+    // --- CHANGE #2: Simplified validation (optional but good practice) ---
+    // We can check if at least one of the core properties exists.
+    if (!name && !profession && !location && !availability) {
+      return res.status(400).json({ error: 'Request body is missing user description properties' });
     }
 
-    const db = getDb();
+    const db = getDb(); // Assuming getDb() is defined elsewhere
+
+    // --- CHANGE #3: Build the insertData object from the new variables ---
     const insertData: any = {
-      name: userDescription.name || null,
-      profession: userDescription.profession || null,
-      location: userDescription.location || null,
-      availability: userDescription.availability || null,
-      raw_payload: JSON.stringify(userDescription),
+      // Use the variables we destructured directly from req.body
+      name: name || null,
+      profession: profession || null,
+      location: location || null,
+      availability: availability || null,
+      // The entire request body is now our raw payload
+      raw_payload: JSON.stringify(req.body), 
       created_at: db.fn.now()
     };
 
