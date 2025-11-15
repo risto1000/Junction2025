@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Set your Google Cloud project ID
-PROJECT_ID="your-project-id"
+PROJECT_ID="apprenticeshipcircle"
 REGION="europe-north1"
 SERVICE_NAME="apprentice-circles-backend"
 INSTANCE_NAME="junction2025db"
