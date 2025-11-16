@@ -6,9 +6,7 @@
     "scripts": {
         "dev": "tsx watch server.ts",
         "build": "tsc",
-        "start": "node dist/server.js",
-        "migrate": "tsx migrate.ts",
-        "test:db": "tsx test-db-init.ts"
+        "start": "node dist/server.js"
     },
     "dependencies": {
         "@elevenlabs/elevenlabs-js": "^2.24.1",
