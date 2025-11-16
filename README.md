@@ -1,4 +1,4 @@
-# Junction 2025
+# ApprenticeCircles - Junction 2025
 
 A community events platform that connects people through local events, micro-apprenticeships, and voice-powered profile creation using ElevenLabs AI.
 
