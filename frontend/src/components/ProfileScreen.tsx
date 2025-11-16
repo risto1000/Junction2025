@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Settings, Share2, BarChart3, Mic, Edit2, Check, X, Plus, Users } from 'lucide-react';
 
 interface ProfileScreenProps {
@@ -26,6 +26,11 @@ export function ProfileScreen({ profile, userId, isEditing, onEditToggle, onProf
   const [localProfile, setLocalProfile] = useState(profile);
   const [editingHobby, setEditingHobby] = useState<string | null>(null);
   const [showRerecordConfirm, setShowRerecordConfirm] = useState(false);
+
+  // Update localProfile when profile prop changes
+  useEffect(() => {
+    setLocalProfile(profile);
+  }, [profile]);
 
   const handleSave = () => {
     onProfileUpdate(localProfile);
